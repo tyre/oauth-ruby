@@ -49,7 +49,7 @@ module OAuth
       :oauth_version => "1.0"
     }
 
-    attr_accessor :options, :key, :secret
+    attr_accessor :options, :key, :secret, :token_request_attempts_remaining
     attr_writer   :site, :http
 
     # Create a new consumer instance by passing it a configuration hash:
@@ -128,7 +128,7 @@ module OAuth
       # if oauth_callback wasn't provided, it is assumed that oauth_verifiers
       # will be exchanged out of band
       request_options[:oauth_callback] ||= OAuth::OUT_OF_BAND unless request_options[:exclude_callback]
-
+      self.token_request_attempts_remaining = request_options[:maximum_token_request_attempts] || 5
       if block_given?
         response = token_request(http_method,
         (request_token_url? ? request_token_url : request_token_path),
@@ -211,10 +211,15 @@ module OAuth
           end
         end
       when (300..399)
-        # this is a redirect
-        uri = URI.parse(response.header['location'])
-        response.error! if uri.path == path # careful of those infinite redirects
-        self.token_request(http_method, uri.path, token, request_options, arguments)
+        if token_request_attempts_remaining > 0
+          # this is a redirect
+          uri = URI.parse(response.header['location'])
+          response.error! if uri.path == path # careful of those infinite redirects
+          self.token_request_attempts_remaining -= 1
+          self.token_request(http_method, uri.path, token, request_options, arguments)
+        else
+          raise OAuth::Unauthorized, response
+        end
       when (400..499)
         raise OAuth::Unauthorized, response
       else
